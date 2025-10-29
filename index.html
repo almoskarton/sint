@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="hu">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Web Szintetizátor — Polifónikus</title>
+  <style>
+    :root{--bg:#0b1220;--panel:#071424;--accent:#7dd3fc;--muted:#9aa4b2}
+    body{font-family:Inter,Segoe UI,Helvetica,Arial;background:var(--bg);color:#eaf6ff;margin:0;padding:16px}
+    h1{font-size:18px;margin:0 0 12px}
+    .layout{display:grid;grid-template-columns:360px 1fr;gap:12px}
+    .panel{background:linear-gradient(180deg, rgba(255,255,255,0.02), transparent);padding:12px;border-radius:10px}
+    .controls{display:flex;flex-direction:column;gap:8px}
+    label{font-size:13px;color:var(--muted)}
+    input[type=range]{width:100%}
+    select,input[type=number]{width:100%}
+    .keyboard{display:flex;gap:3px;padding:8px;background:#061028;border-radius:8px;margin-top:8px}
+    .key{user-select:none;padding:10px 6px;border-radius:4px;background:#0b2233;border:1px solid rgba(255,255,255,0.03);text-align:center;cursor:pointer}
+    .key.white{background:#e9f6ff;color:#06202a;width:36px}
+    .key.black{background:#122534;color:#d7f3ff;width:26px;margin-left:-12px;margin-right:-12px;z-index:2}
+    .kbd-row{position:relative}
+    .small{font-size:12px;color:var(--muted)}
+    .row{display:flex;gap:8px}
+    button{background:#072033;border:1px solid rgba(255,255,255,0.03);color:var(--accent);padding:8px 10px;border-radius:8px;cursor:pointer}
+    .footer{font-size:12px;color:var(--muted);margin-top:8px}
+  </style>
+</head>
+<body>
+  <h1>Web Szintetizátor — Polifónikus (nem beragadó)</h1>
+  <div class="layout">
+    <div class="panel">
+      <strong>Oszcillátor</strong>
+      <div class="controls">
+        <label>Hullámforma</label>
+        <select id="waveform"><option value="sine">Sine</option><option value="sawtooth">Saw</option><option value="square">Square</option><option value="triangle">Triangle</option></select>
+        <label>Detune (cents)</label>
+        <input id="detune" type="range" min="-1200" max="1200" step="1" value="0">
+        <label>Unison (voices)</label>
+        <input id="unison" type="range" min="1" max="8" step="1" value="1">
+      </div>
+
+      <hr style="margin:10px 0;border:none;border-top:1px solid rgba(255,255,255,0.03)">
+      <strong>ADSR (burkoló)</strong>
+      <div class="controls">
+        <label>Támadás (A) ms</label>
+        <input id="attack" type="range" min="0" max="2000" step="1" value="10">
+        <label>Decay (D) ms</label>
+        <input id="decay" type="range" min="0" max="3000" step="1" value="120">
+        <label>Sustain (S) 0-1</label>
+        <input id="sustain" type="range" min="0" max="1" step="0.01" value="0.7">
+        <label>Release (R) ms</label>
+        <input id="release" type="range" min="0" max="5000" step="1" value="300">
+      </div>
+
+      <hr style="margin:10px 0;border:none;border-top:1px solid rgba(255,255,255,0.03)">
+      <strong>Filter</strong>
+      <div class="controls">
+        <label>Type</label>
+        <select id="filterType"><option value="lowpass">Low-pass</option><option value="highpass">High-pass</option><option value="bandpass">Band-pass</option></select>
+        <label>Cutoff (Hz)</label>
+        <input id="cutoff" type="range" min="20" max="20000" step="1" value="8000">
+        <label>Resonance (Q)</label>
+        <input id="resonance" type="range" min="0.1" max="20" step="0.1" value="1">
+      </div>
+
+      <hr style="margin:10px 0;border:none;border-top:1px solid rgba(255,255,255,0.03)">
+      <strong>Effektek</strong>
+      <div class="controls">
+        <label>Delay idő (s)</label>
+        <input id="delayTime" type="range" min="0" max="1.5" step="0.01" value="0.25">
+        <label>Delay visszacsatolás</label>
+        <input id="delayFB" type="range" min="0" max="0.95" step="0.01" value="0.25">
+        <label>Reverb wet</label>
+        <input id="revWet" type="range" min="0" max="1" step="0.01" value="0.12">
+        <label>Master Volume</label>
+        <input id="masterVol" type="range" min="0" max="1" step="0.01" value="0.8">
+      </div>
+
+      <div style="margin-top:10px" class="row">
+        <button id="noteOn">Hang le</button>
+        <button id="noteOff">Hang fel</button>
+        <button id="randomPreset">Random preset</button>
+      </div>
+
+      <div class="footer">QWERTY billentyűkkel játszhatsz: Z–M fehér billentyűk. Többször egymás után lenyomva sem ragad be a hang.</div>
+    </div>
+
+    <div class="panel">
+      <strong>Billentyűzet</strong>
+      <div class="kbd-row keyboard" id="keyboard"></div>
+      <div style="margin-top:12px"><small class="small">Aktív hangok: <span id="voicesCount">0</span></small></div>
+      <div style="margin-top:12px"><strong>Realtime vizualizáció</strong><canvas id="viz" width="900" height="200" style="width:100%;background:#03101a;border-radius:6px;margin-top:6px"></canvas></div>
+    </div>
+  </div>
+
+<script>
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  const ctx = new AudioCtx();
+  const master = ctx.createGain(); master.gain.value=0.8; master.connect(ctx.destination);
+
+  const filterNode = ctx.createBiquadFilter(); filterNode.type='lowpass'; filterNode.frequency.value=8000; filterNode.Q.value=1;
+  const delayNode = ctx.createDelay(5.0); delayNode.delayTime.value=0.25;
+  const delayFB = ctx.createGain(); delayFB.gain.value=0.25; delayNode.connect(delayFB); delayFB.connect(delayNode);
+  const reverb = ctx.createConvolver();
+  const reverbWet = ctx.createGain(); reverbWet.gain.value=0.12;
+  const reverbDry = ctx.createGain(); reverbDry.gain.value=1-reverbWet.gain.value;
+
+  const inputMerger = ctx.createGain(); inputMerger.connect(filterNode);
+  filterNode.connect(reverbDry); filterNode.connect(reverb);
+  reverb.connect(reverbWet); reverbDry.connect(delayNode); reverbWet.connect(delayNode); delayNode.connect(master); filterNode.connect(master);
+
+  function makeReverbIR(duration=2.0, decay=2.0){
+    const rate = ctx.sampleRate; const length = Math.floor(duration*rate);
+    const ir = ctx.createBuffer(2,length,rate);
+    for(let ch=0; ch<2; ch++){const channel=ir.getChannelData(ch); for(let i=0;i<length;i++){channel[i]=(Math.random()*2-1)*Math.pow(1-i/length,decay);}}
+    return ir;
+  }
+  reverb.buffer = makeReverbIR(2.5,2.2);
+
+  const voices = new Map(); // key -> [voice1, voice2, ...]
+
+  function getADSR(){ return { attack: Number(document.getElementById('attack').value)/1000, decay: Number(document.getElementById('decay').value)/1000, sustain: Number(document.getElementById('sustain').value), release: Number(document.getElementById('release').value)/1000 };}
+  function noteToFreq(note){ return 440 * Math.pow(2,(note-69)/12);}
+
+  const keyMap = {'z':60,'s':61,'x':62,'d':63,'c':64,'v':65,'g':66,'b':67,'h':68,'n':69,'j':70,'m':71,',':72,'l':73,'.':74,';':75,'/':76};
+
+  const waveformEl=document.getElementById('waveform');
+  const detuneEl=document.getElementById('detune');
+  const unisonEl=document.getElementById('unison');
+  const cutoffEl=document.getElementById('cutoff');
+  const resonanceEl=document.getElementById('resonance');
+  const delayTimeEl=document.getElementById('delayTime');
+  const delayFBEl=document.getElementById('delayFB');
+  const revWetEl=document.getElementById('revWet');
+  const masterVolEl=document.getElementById('masterVol');
+
+  cutoffEl.addEventListener('input',()=>{filterNode.frequency.value=Number(cutoffEl.value);});
+  resonanceEl.addEventListener('input',()=>{filterNode.Q.value=Number(resonanceEl.value);});
+  document.getElementById('filterType').addEventListener('change',()=>{filterNode.type=document.getElementById('filterType').value;});
+  delayTimeEl.addEventListener('input',()=>{delayNode.delayTime.value=Number(delayTimeEl.value);});
+  delayFBEl.addEventListener('input',()=>{delayFB.gain.value=Number(delayFBEl.value);});
+  revWetEl.addEventListener('input',()=>{reverbWet.gain.value=Number(revWetEl.value); reverbDry.gain.value=1-reverbWet.gain.value;});
+  masterVolEl.addEventListener('input',()=>{master.gain.value=Number(masterVolEl.value);});
+
+  const keyboard=document.getElementById('keyboard');
+  const keysOrder=['z','s','x','d','c','v','g','b','h','n','j','m',',','l','.',';','/'];
+  function buildKeyboard(){keyboard.innerHTML=''; keysOrder.forEach(k=>{
+    const note=keyMap[k];
+    const isBlack=['s','d','g','h','j','l',';'].includes(k);
+    const el=document.createElement('div'); el.className='key '+(isBlack?'black':'white'); el.textContent=k.toUpperCase(); el.dataset.key=k; el.dataset.note=note;
+    el.addEventListener('pointerdown',()=>{triggerNoteOn(k); el.classList.add('active');});
+    el.addEventListener('pointerup',()=>{triggerNoteOff(k); el.classList.remove('active');});
+    el.addEventListener('pointerleave',()=>{el.classList.remove('active');});
+    keyboard.appendChild(el);
+  });}
+  buildKeyboard();
+
+  function triggerNoteOn(key){
+    if(!(key in keyMap)) return;
+    const midi = keyMap[key]; const freq = noteToFreq(midi);
+    const adsr=getADSR(); const voiceList=voices.get(key)||[];
+
+    const oscNodes=[];
+    const unison=Number(unisonEl.value);
+    for(let i=0;i<unison;i++){ const o=ctx.createOscillator(); o.type=waveformEl.value;
+      const baseDetune=Number(detuneEl.value);
+      const spread=unison>1?(i-(unison-1)/2)*(i===Math.floor(unison/2)?0:8):0;
+      o.frequency.value=freq; o.detune.value=baseDetune+spread; oscNodes.push(o);
+    }
+    const gainNode=ctx.createGain(); gainNode.gain.value=0.0001;
+    oscNodes.forEach(o=>o.connect(gainNode)); gainNode.connect(inputMerger);
+
+    const now=ctx.currentTime;
+    gainNode.gain.cancelScheduledValues(now);
+    gainNode.gain.setValueAtTime(0.0001,now);
+    gainNode.gain.linearRampToValueAtTime(1.0,now+adsr.attack);
+    gainNode.gain.linearRampToValueAtTime(adsr.sustain,now+adsr.attack+adsr.decay);
+
+    oscNodes.forEach(o=>o.start(now));
+
+    const voice={oscNodes,gainNode,startedAt:Date.now(),midi};
+    voiceList.push(voice);
+    voices.set(key,voiceList);
+    updateVoicesUI();
+  }
+
+  function triggerNoteOff(key){
+    const list=voices.get(key); if(!list) return;
+    const r=Number(document.getElementById('release').value)/1000;
+    const now=ctx.currentTime;
+    list.forEach(v=>{
+      v.gainNode.gain.cancelScheduledValues(now);
+      v.gainNode.gain.setValueAtTime(v.gainNode.gain.value,now);
+      v.gainNode.gain.linearRampToValueAtTime(0.0001,now+r);
+      setTimeout(()=>{v.oscNodes.forEach(o=>{try{o.stop();}catch(e){} }); v.oscNodes.forEach(o=>{try{o.disconnect();}catch(e){} }); try{v.gainNode.disconnect();}catch(e){}},(r+0.05)*1000);
+    });
+    voices.delete(key);
+    updateVoicesUI();
+  }
+
+  const activeKeys=new Set();
+  window.addEventListener('keydown',e=>{if(e.repeat)return; const k=e.key.toLowerCase(); if(keyMap[k]){ if(!activeKeys.has(k)){ activeKeys.add(k); triggerNoteOn(k); const el=document.querySelector(`.key[data-key="${k}"]`); if(el) el.classList.add('active');}}});
+  window.addEventListener('keyup',e=>{ const k=e.key.toLowerCase(); if(keyMap[k]){ activeKeys.delete(k); triggerNoteOff(k); const el=document.querySelector(`.key[data-key="${k}"]`); if(el) el.classList.remove('active');}});
+
+  document.getElementById('noteOn').addEventListener('click',()=>{if(ctx.state==='suspended')ctx.resume(); triggerNoteOn('z'); setTimeout(()=>triggerNoteOff('z'),800);});
+  document.getElementById('noteOff').addEventListener('click',()=>{for(const k of Array.from(voices.keys())) triggerNoteOff(k);});
+
+  function updateVoicesUI(){document.getElementById('voicesCount').textContent=[...voices.values()].reduce((acc,l)=>acc+l.length,0);}
+
+  const canvas=document.getElementById('viz'); const cctx=canvas.getContext('2d'); const analyser=ctx.createAnalyser(); analyser.fftSize=2048;
+  const vizGain=ctx.createGain(); master.connect(vizGain); vizGain.connect(analyser);
+  function drawViz(){requestAnimationFrame(drawViz); const w=canvas.width; const h=canvas.height; const data=new Uint8Array(analyser.fftSize); analyser.getByteTimeDomainData(data); cctx.clearRect(0,0,w,h); cctx.lineWidth=2; cctx.beginPath(); const slice=w/data.length; for(let i=0;i<data.length;i++){const v=data[i]/128.0; const y=v*h/2; if(i===0)cctx.moveTo(0,y);else cctx.lineTo(i*slice,y);} cctx.strokeStyle='#7dd3fc'; cctx.stroke();}
+  drawViz();
+  window.addEventListener('pointerdown',()=>{if(ctx.state==='suspended')ctx.resume();},{once:true});
+</script>
+</body>
+</html>
